@@ -5,6 +5,7 @@ export type SecurityEventType =
   | "AUTH_EMAIL_OTP_SENT"
   | "AUTH_EMAIL_OTP_RESENT"
   | "AUTH_EMAIL_OTP_FAILURE"
+  | "AUTH_EMAIL_DELIVERY_FAILURE"
   | "AUTH_EMAIL_VERIFIED"
   | "AUTH_LOGIN_SUCCESS"
   | "AUTH_LOGIN_FAILURE"
@@ -57,4 +58,3 @@ export const SecurityEventModel: Model<SecurityEvent> = mongoose.model<SecurityE
   "SecurityEvent",
   securityEventSchema,
 );
-

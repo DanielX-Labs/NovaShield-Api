@@ -10,6 +10,8 @@ export interface AuthUser {
   lastFailedLoginAt?: Date;
   lastSuccessfulLoginAt?: Date;
   passwordChangedAt?: Date;
+  // Shared cooldown gate; transactions serialize resend and verification here.
+  verificationOtpIssuedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -26,6 +28,7 @@ const authUserSchema = new Schema<AuthUser>(
     lastFailedLoginAt: { type: Date, select: false },
     lastSuccessfulLoginAt: { type: Date },
     passwordChangedAt: { type: Date },
+    verificationOtpIssuedAt: { type: Date, select: false },
   },
   {
     timestamps: true,
@@ -39,4 +42,3 @@ export const AuthUserModel: Model<AuthUser> = mongoose.model<AuthUser>(
   "AuthUser",
   authUserSchema,
 );
-

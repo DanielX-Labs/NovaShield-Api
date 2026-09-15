@@ -7,6 +7,7 @@ import { httpLogger } from "./middleware/httpLogger.middleware.js";
 import { notFoundHandler } from "./middleware/notFound.middleware.js";
 import { errorHandler } from "./middleware/error.middleware.js";
 import { healthRouter } from "./routes/health.routes.js";
+import { createAuthRouter } from "./routes/auth.routes.js";
 
 export const app = express();
 app.disable("x-powered-by");
@@ -26,6 +27,7 @@ app.use(cors({
 app.use(express.json({ limit: "32kb" }));
 app.use(express.urlencoded({ extended: false, limit: "32kb" }));
 app.use("/api/v1", healthRouter);
+app.use("/api/v1", createAuthRouter());
 
 // Fallback handlers must come after all routes.
 app.use(notFoundHandler);

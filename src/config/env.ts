@@ -9,9 +9,20 @@ const envSchema = z.object({
   MONGODB_URI: z.string().min(1, "MONGODB_URI is required"),
   EXPENSEHUB_ORIGIN: z.string().url(),
   JWT_ACCESS_SECRET: z.string().min(32),
-  JWT_REFRESH_SECRET: z.string().min(32),
-  ACCESS_TOKEN_TTL: z.string().default("15m"),
-  REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(7),
+  // Only access tokens are JWTs; refresh tokens use independent random secrets.
+  ACCESS_TOKEN_TTL_MINUTES: z.coerce.number().int().min(5).max(60).default(15),
+  REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).max(30).default(7),
+  REFRESH_COOKIE_NAME: z.string()
+    .regex(/^[A-Za-z0-9_-]+$/u)
+    .default("novashield_refresh"),
+  COOKIE_SECURE: z.enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+  COOKIE_SAME_SITE: z.enum(["lax", "strict", "none"]).default("lax"),
+  LOGIN_WINDOW_MINUTES: z.coerce.number().int().positive().default(15),
+  LOGIN_IP_LIMIT: z.coerce.number().int().positive().default(30),
+  LOGIN_ACCOUNT_LIMIT: z.coerce.number().int().positive().default(10),
+  IP_HASH_SECRET: z.string().min(32),
   AUTH_PEPPER: z.string().min(32),
   // Bound password input and tune Argon2 independently of password policy.
   PASSWORD_MIN_LENGTH: z.coerce.number().int().min(8).default(15),
@@ -47,6 +58,23 @@ const envSchema = z.object({
   OTP_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(5),
   OTP_RESEND_COOLDOWN_SECONDS: z.coerce.number().int().min(30).default(60),
 }).superRefine((config, context) => {
+  // Browsers reject SameSite=None without Secure; production requires HTTPS.
+  if (!config.COOKIE_SECURE
+    && (config.COOKIE_SAME_SITE === "none" || config.NODE_ENV === "production")) {
+    context.addIssue({
+      code: "custom",
+      path: ["COOKIE_SECURE"],
+      message: "Secure cookies are required for production or SameSite=None.",
+    });
+  }
+  if (config.REFRESH_COOKIE_NAME.startsWith("__Host-")
+    || (config.REFRESH_COOKIE_NAME.startsWith("__Secure-") && !config.COOKIE_SECURE)) {
+    context.addIssue({
+      code: "custom",
+      path: ["REFRESH_COOKIE_NAME"],
+      message: "Cookie name prefix is incompatible with the configured path or security.",
+    });
+  }
   // Reject contradictory limits before the server accepts requests.
   if (config.PASSWORD_MIN_LENGTH > config.PASSWORD_MAX_LENGTH) {
     context.addIssue({

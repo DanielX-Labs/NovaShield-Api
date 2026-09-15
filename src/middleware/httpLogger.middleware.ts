@@ -9,7 +9,12 @@ export const httpLogger = pinoHttp({
   // Keep HTTP logs small and exclude request bodies and headers.
   serializers: {
     req(req) {
-      return { method: req.method, url: req.url, requestId: req.id };
+      // Query strings can contain mistakenly supplied OTPs or passwords.
+      return {
+        method: req.method,
+        url: req.url?.split("?")[0],
+        requestId: req.id,
+      };
     },
     res(res) {
       return { statusCode: res.statusCode };

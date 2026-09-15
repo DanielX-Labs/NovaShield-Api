@@ -1,11 +1,13 @@
 import mongoose from "mongoose";
 import { env } from "./env.js";
 import { logger } from "./logger.js";
+import { initializeAuthStorage } from "./authStorage.js";
 
 export async function connectDatabase(): Promise<void> {
   try {
     // Fail startup promptly when MongoDB cannot be reached.
     await mongoose.connect(env.MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
+    await initializeAuthStorage();
     logger.info("MongoDB connection established");
   } catch (error) {
     logger.error({ err: error }, "MongoDB connection failed");

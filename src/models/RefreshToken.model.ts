@@ -1,6 +1,8 @@
 import mongoose, { type HydratedDocument, type Model, Schema, type Types } from "mongoose";
 
 export interface RefreshToken {
+  // Public token ID identifies this record; the random secret is stored only hashed.
+  _id: Types.ObjectId;
   userId: Types.ObjectId;
   sessionId: Types.ObjectId;
   familyId: string;
@@ -39,4 +41,3 @@ export const RefreshTokenModel: Model<RefreshToken> = mongoose.model<RefreshToke
   "RefreshToken",
   refreshTokenSchema,
 );
-

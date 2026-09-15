@@ -10,6 +10,21 @@ export const errorHandler: ErrorRequestHandler = (error: unknown, req, res, next
     return;
   }
   const requestId = req.id;
+  // Body-parser errors may retain raw input. Never log their body or message.
+  const bodyError = error as { type?: string };
+  if (bodyError?.type === "entity.parse.failed"
+    || bodyError?.type === "entity.too.large") {
+    const tooLarge = bodyError.type === "entity.too.large";
+    res.status(tooLarge ? 413 : 400).json({
+      success: false,
+      error: {
+        code: tooLarge ? "REQUEST_TOO_LARGE" : "INVALID_JSON",
+        message: tooLarge ? "Request body is too large." : "Invalid JSON body.",
+      },
+      requestId,
+    });
+    return;
+  }
   if (error instanceof AppError) {
     if (error.statusCode >= 500) {
       logger.error({ err: error, requestId }, "Operational server error");

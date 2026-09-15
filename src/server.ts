@@ -3,6 +3,7 @@ import { app } from "./app.js";
 import { env } from "./config/env.js";
 import { connectDatabase, disconnectDatabase } from "./config/database.js";
 import { logger } from "./config/logger.js";
+import { initializeDummyPasswordHash } from "./services/password/dummyPassword.service.js";
 
 const server = http.createServer(app);
 let shuttingDown = false;
@@ -11,6 +12,8 @@ async function startServer(): Promise<void> {
   try {
     // Only accept traffic after the database connection succeeds.
     await connectDatabase();
+    // Fail startup if the timing-protection hash cannot be prepared.
+    await initializeDummyPasswordHash();
     if (shuttingDown) return;
     server.listen(env.PORT, () => {
       logger.info({ port: env.PORT, environment: env.NODE_ENV }, "NovaShield server started");
