@@ -1,3 +1,4 @@
+import { AuthAttemptModel } from "../models/AuthAttempt.model.js";
 import mongoose from "mongoose";
 import { AuthUserModel } from "../models/AuthUser.model.js";
 import { CredentialModel } from "../models/Credential.model.js";
@@ -20,6 +21,7 @@ export async function initializeAuthStorage(): Promise<void> {
   // createIndexes adds missing indexes; it never drops existing indexes.
   for (const model of [
     AuthUserModel,
+    AuthAttemptModel,
     CredentialModel,
     OtpChallengeModel,
     PasswordHistoryModel,

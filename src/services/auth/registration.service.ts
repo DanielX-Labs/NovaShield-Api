@@ -2,12 +2,12 @@ import mongoose, { Types, type ClientSession } from "mongoose";
 import { env } from "../../config/env.js";
 import { AuthUserModel } from "../../models/AuthUser.model.js";
 import { CredentialModel } from "../../models/Credential.model.js";
-import { PasswordHistoryModel } from "../../models/PasswordHistory.model.js";
+import { createOtpChallenge } from "../otp/otpChallenge.service.js";
 import { OtpChallengeModel } from "../../models/OtpChallenge.model.js";
 import { AppError } from "../../utils/AppError.js";
 import { normalizeEmail } from "../../utils/email.js";
 import { createPasswordHash } from "../password/password.service.js";
-import { generateOtp, hashOtp, verifyOtpHash } from "../otp/otp.service.js";
+import { generateOtp, verifyOtpHash } from "../otp/otp.service.js";
 import { sendVerificationOtpEmail } from "../email/email.service.js";
 import {
   recordSecurityEvent,
@@ -60,21 +60,11 @@ export function createRegistrationService(
     otp: string,
     session: ClientSession,
   ): Promise<void> {
-    // Replacing a challenge invalidates all previous verification codes.
-    await OtpChallengeModel.updateMany(
-      { userId, purpose: "EMAIL_VERIFICATION", consumedAt: { $exists: false } },
-      { $set: { consumedAt: new Date() } },
-      { session },
-    );
-    await OtpChallengeModel.create([{
-      _id: id,
-      userId,
-      purpose: "EMAIL_VERIFICATION",
-      otpHash: hashOtp(otp, id.toHexString()),
-      target: email,
-      expiresAt: new Date(Date.now() + env.OTP_TTL_MINUTES * 60_000),
-      maxAttempts: env.OTP_MAX_ATTEMPTS,
-    }], { session });
+    // Share challenge storage rules while preserving verification-specific defaults.
+    await createOtpChallenge({
+      userId, purpose: "EMAIL_VERIFICATION", target: email,
+      challengeId: id, otp,
+    }, session);
   }
 
   async function deliver(
@@ -141,7 +131,7 @@ export function createRegistrationService(
         }], { session });
         await CredentialModel.create([{ userId, passwordHash }], { session });
         // Seed history with the initial password so it cannot be reused later.
-        await PasswordHistoryModel.create([{ userId, passwordHash }], { session });
+        // History starts empty; only replaced credentials belong there.
         await createChallenge(userId, email, challengeId, otp, session);
         await recordSecurityEvent("AUTH_REGISTERED", context, userId, session);
         return true;

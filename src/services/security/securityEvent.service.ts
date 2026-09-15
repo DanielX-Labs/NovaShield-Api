@@ -1,3 +1,4 @@
+import type { AuthAbuseAssessment } from "./authAbuse.types.js";
 import { createHmac } from "node:crypto";
 import type { ClientSession, Types } from "mongoose";
 import type { Request } from "express";
@@ -38,10 +39,23 @@ export async function recordSecurityEvent(
   userId?: Types.ObjectId,
   session?: ClientSession,
   severity: SecurityEventSeverity = "INFO",
+  abuse?: AuthAbuseAssessment,
 ): Promise<void> {
   await SecurityEventModel.create([{
     eventType,
     severity,
+    // Only fixed assessment fields may enter abuse metadata, never arbitrary bodies.
+    ...(abuse ? { metadata: {
+      score: abuse.score,
+      reasons: abuse.reasons.filter((reason) => [
+        "REPEATED_ACCOUNT_FAILURES", "ACCOUNT_FAILURE_THRESHOLD",
+        "IP_FAILURE_THRESHOLD", "POSSIBLE_PASSWORD_SPRAY",
+        "MULTI_ACCOUNT_FAILURE_PATTERN",
+      ].includes(reason)),
+      accountFailures: abuse.accountFailures,
+      ipFailures: abuse.ipFailures,
+      distinctAccountsFromIp: abuse.distinctAccountsFromIp,
+    } } : {}),
     // Copy individual allowed fields rather than spreading caller-supplied objects.
     requestId: context.requestId,
     ...(context.ipHash ? { ipHash: context.ipHash } : {}),

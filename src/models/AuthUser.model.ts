@@ -12,6 +12,7 @@ export interface AuthUser {
   passwordChangedAt?: Date;
   // Shared cooldown gate; transactions serialize resend and verification here.
   verificationOtpIssuedAt?: Date;
+  passwordResetOtpIssuedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -29,6 +30,7 @@ const authUserSchema = new Schema<AuthUser>(
     lastSuccessfulLoginAt: { type: Date },
     passwordChangedAt: { type: Date },
     verificationOtpIssuedAt: { type: Date, select: false },
+    passwordResetOtpIssuedAt: { type: Date, select: false },
   },
   {
     timestamps: true,

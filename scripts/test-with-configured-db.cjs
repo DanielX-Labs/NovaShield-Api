@@ -13,7 +13,7 @@ if (!config.MONGODB_URI) {
 // Pass credentials privately through the child environment, never command arguments.
 const child = spawn(
   process.execPath,
-  [join(dirname(require.resolve("vitest/package.json")), "vitest.mjs"), "run"],
+  [join(dirname(require.resolve("vitest/package.json")), "vitest.mjs"), "run", ...process.argv.slice(2)],
   {
     stdio: "inherit",
     env: {

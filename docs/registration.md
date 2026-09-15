@@ -22,8 +22,8 @@ credentials. Ineligible requests return an inert challenge ID.
 MongoDB must support replica-set transactions. Startup prepares collections and
 adds the required indexes without dropping existing indexes.
 
-Registration atomically creates AuthUser, Credential, PasswordHistory,
-OtpChallenge, and AUTH_REGISTERED. SMTP runs after commit so transaction retries
+Registration atomically creates AuthUser, Credential, OtpChallenge, and
+AUTH_REGISTERED. Password history starts empty and archives replaced credentials. SMTP runs after commit so transaction retries
 cannot send duplicate emails. A failed send leaves the identity pending,
 invalidates the challenge, records AUTH_EMAIL_DELIVERY_FAILURE, and returns 503.
 The caller can resend after the cooldown. A process crash between commit and SMTP

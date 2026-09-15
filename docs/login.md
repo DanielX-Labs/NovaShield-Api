@@ -23,14 +23,14 @@ Origin. Proxy trust remains disabled until trusted proxy topology is configured.
 Access tokens use HS256, issuer `novashield`, audience `expensehub-api`, and
 `ACCESS_TOKEN_TTL_MINUTES`. Verification checks signature, expiration, token
 type, subject, session ID, issue time, and positive integer credential version.
-`verifyAccessToken` validates the token only; future authenticated middleware
-must also validate current account, credential, and session state.
+`verifyAccessToken` validates the token only; authenticated middleware also
+validates current account, credential, and session state.
 
 Refresh tokens use `ObjectId.random-secret` with 48 random bytes. MongoDB stores
 only SHA-256 of the complete token. Each login starts a new token family. Session
 and refresh-token expiry are aligned to `REFRESH_TOKEN_TTL_DAYS`.
 
-Login state, Session, RefreshToken, and AUTH_LOGIN_SUCCESS commit in one MongoDB
+Login state, Session, RefreshToken, AuthAttempt and AUTH_LOGIN_SUCCESS commit in one MongoDB
 transaction. Wrong-password increments and failure audit events also commit
 together. No external service is called during login. Dummy Argon2 verification
 runs for unknown users and missing credentials and is initialized before listen.
@@ -49,10 +49,11 @@ attribute; set and clear helpers use identical path and security settings.
 
 Login uses shared MongoDB IP counters with `LOGIN_IP_LIMIT` attempts per
 `LOGIN_WINDOW_MINUTES`. In-flight attempts count immediately; successful
-responses release their reservation. HTTP 429 includes Retry-After. Counter
-storage failures fail closed. `LOGIN_ACCOUNT_LIMIT` is reserved for the next
-abuse-service milestone; this stage does not implement account-keyed throttling,
-progressive delays, or permanent lockouts.
+responses release their reservation. Outer-limiter HTTP 429 responses include
+Retry-After. Counter storage failures fail closed. The [abuse engine](auth-abuse.md)
+adds rolling account/IP failure thresholds,
+progressive delays and suspicious-pattern scoring. `LOGIN_ACCOUNT_LIMIT` is a
+legacy unused setting; configure `AUTH_ACCOUNT_FAILURE_LIMIT` instead.
 
 ## Verification and next milestone
 
@@ -67,4 +68,6 @@ password. Tests create identities only inside their isolated database.
 
 Refresh rotation, reuse detection, logout, session management, and authenticated
 middleware are implemented in the [session lifecycle](session-lifecycle.md).
-Password change/reset and stronger account-keyed abuse defenses remain future work.
+Password change/reset is implemented in the [password lifecycle](password-lifecycle.md).
+Account-keyed throttling and progressive delays are described in the
+[abuse defense documentation](auth-abuse.md). Production hardening is next.

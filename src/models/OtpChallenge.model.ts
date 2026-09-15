@@ -9,6 +9,8 @@ export interface OtpChallenge {
   expiresAt: Date;
   attempts: number;
   maxAttempts: number;
+  // Reset challenges cannot authorize changes against a newer credential.
+  credentialVersion?: number;
   consumedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -25,6 +27,7 @@ const otpChallengeSchema = new Schema<OtpChallenge>(
     expiresAt: { type: Date, required: true, index: true },
     attempts: { type: Number, default: 0, min: 0, select: false },
     maxAttempts: { type: Number, required: true, min: 1, select: false },
+    credentialVersion: { type: Number, min: 1, select: false },
     consumedAt: { type: Date, select: false },
   },
   {
@@ -39,4 +42,3 @@ export const OtpChallengeModel: Model<OtpChallenge> = mongoose.model<OtpChalleng
   "OtpChallenge",
   otpChallengeSchema,
 );
-

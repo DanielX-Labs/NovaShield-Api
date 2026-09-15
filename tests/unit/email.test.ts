@@ -30,10 +30,11 @@ vi.mock("../../src/config/env.js", () => ({
     BREVO_SENDER_EMAIL: "sender@example.com",
     SUPPORT_EMAIL: "support@example.com",
     OTP_TTL_MINUTES: 10,
+    PASSWORD_RESET_OTP_TTL_MINUTES: 15,
   },
 }));
 import { env } from "../../src/config/env.js";
-import { sendVerificationOtpEmail } from "../../src/services/email/email.service.js";
+import { sendVerificationOtpEmail, sendPasswordResetOtpEmail, sendPasswordChangedEmail } from "../../src/services/email/email.service.js";
 import { verifyBrevoConnection } from "../../src/services/email/brevoSmtp.provider.js";
 
 beforeEach(() => {
@@ -80,5 +81,24 @@ describe("Email boundary", () => {
     await verifyBrevoConnection();
     expect(mocks.verify).toHaveBeenCalled();
     expect(mocks.sendMail).not.toHaveBeenCalled();
+  });
+});
+
+// Templates use their own expiry and do not include credentials in change notices.
+describe("Password lifecycle email", () => {
+  it("uses the reset expiry and rejects nonnumeric template input", async () => {
+    await sendPasswordResetOtpEmail("customer@example.com", "123456");
+    expect(mocks.sendMail).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining("15 minutes"),
+      html: expect.stringContaining("123456"),
+    }));
+    await expect(sendPasswordResetOtpEmail("customer@example.com", "<script>"))
+      .rejects.toThrow("six digits");
+  });
+  it("notifies the user of session revocation", async () => {
+    await sendPasswordChangedEmail("customer@example.com");
+    expect(mocks.sendMail).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining("all sessions were signed out"),
+    }));
   });
 });

@@ -70,7 +70,7 @@ describe("Password history", () => {
     expect(query.sort).toHaveBeenCalledWith({ createdAt: -1, _id: -1 });
     expect(mocks.deleteMany).toHaveBeenCalledWith({
       userId, _id: { $in: [oldId] },
-    });
+    }, undefined);
   });
 
   it("does not delete entries when history is within the limit", async () => {

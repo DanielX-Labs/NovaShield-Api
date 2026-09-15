@@ -9,6 +9,14 @@ import {
 // No private .env is loaded. Only SMTP and HIBP are replaced by test doubles.
 vi.mock("../../src/config/env.js", () => ({
   env: {
+    AUTH_FAILURE_WINDOW_MINUTES: 15,
+    AUTH_ACCOUNT_FAILURE_LIMIT: 8,
+    AUTH_IP_FAILURE_LIMIT: 30,
+    AUTH_PROGRESSIVE_DELAY_AFTER: 3,
+    AUTH_PROGRESSIVE_DELAY_BASE_MS: 500,
+    AUTH_PROGRESSIVE_DELAY_MAX_MS: 5000,
+    AUTH_SPRAY_ACCOUNT_THRESHOLD: 8,
+    AUTH_SUSPICIOUS_SCORE_THRESHOLD: 50,
     NODE_ENV: "test",
     APP_NAME: "NovaShield-test",
     EXPENSEHUB_ORIGIN: "http://localhost:3000",
@@ -29,6 +37,10 @@ vi.mock("../../src/config/env.js", () => ({
     ARGON2_PARALLELISM: 1,
     PASSWORD_HISTORY_LIMIT: 5,
     BREACHED_PASSWORD_FAIL_MODE: "closed",
+    PASSWORD_RESET_OTP_TTL_MINUTES: 10,
+    PASSWORD_RESET_MAX_ATTEMPTS: 5,
+    PASSWORD_RESET_REQUEST_WINDOW_MINUTES: 15,
+    PASSWORD_RESET_REQUEST_LIMIT: 5,
     OTP_TTL_MINUTES: 10,
     OTP_MAX_ATTEMPTS: 5,
     OTP_RESEND_COOLDOWN_SECONDS: 60,
@@ -36,10 +48,14 @@ vi.mock("../../src/config/env.js", () => ({
 }));
 const external = vi.hoisted(() => ({
   sendOtp: vi.fn(),
+  sendResetOtp: vi.fn(),
+  sendChanged: vi.fn(),
   checkBreachedPassword: vi.fn(),
 }));
 vi.mock("../../src/services/email/email.service.js", () => ({
   sendVerificationOtpEmail: external.sendOtp,
+  sendPasswordResetOtpEmail: external.sendResetOtp,
+  sendPasswordChangedEmail: external.sendChanged,
 }));
 vi.mock("../../src/services/password/breachedPassword.service.js", () => ({
   checkBreachedPassword: external.checkBreachedPassword,
@@ -50,6 +66,7 @@ vi.mock("../../src/config/logger.js", async () => {
   return { logger: pino({ level: "silent" }) };
 });
 
+import { AuthAttemptModel } from "../../src/models/AuthAttempt.model.js";
 import { app } from "../../src/app.js";
 import { AuthUserModel } from "../../src/models/AuthUser.model.js";
 import { CredentialModel } from "../../src/models/Credential.model.js";
@@ -68,11 +85,13 @@ import * as dummyPassword from "../../src/services/password/dummyPassword.servic
 let replica: MongoMemoryReplSet | undefined;
 const testDatabaseName = "ns_it_" + randomUUID().replaceAll("-", "");
 // Remote replica sets need a larger per-test budget than local unit tests.
-vi.setConfig({ testTimeout: 30_000 });
+vi.setConfig({
+  testTimeout: process.env.NOVASHIELD_TEST_MONGODB_URI ? 60_000 : 30_000,
+});
 const email = "customer@example.com";
 const password = "Orbit-Cedar!Lantern-47";
 const models = [
-  AuthUserModel, CredentialModel, OtpChallengeModel,
+  AuthAttemptModel, AuthUserModel, CredentialModel, OtpChallengeModel,
   PasswordHistoryModel, SecurityEventModel, AbuseBucketModel,
   SessionModel, RefreshTokenModel,
 ];
@@ -102,6 +121,8 @@ beforeAll(async () => {
 beforeEach(async () => {
   vi.restoreAllMocks();
   external.sendOtp.mockReset().mockResolvedValue(undefined);
+  external.sendResetOtp.mockReset().mockResolvedValue(undefined);
+  external.sendChanged.mockReset().mockResolvedValue(undefined);
   external.checkBreachedPassword.mockReset().mockResolvedValue({
     checked: true, breached: false, occurrenceCount: 0,
   });
@@ -147,7 +168,7 @@ describe("Registration and email verification", () => {
       .send({ email, password: "x".repeat(40_000) });
     expect(oversized.status).toBe(413);
   });
-  it("creates pending identity, hashes, history and audit records then activates once", async () => {
+  it("creates pending identity, credentials and audit records then activates once", async () => {
     const response = await register("  CUSTOMER@example.com  ");
     expect(response.status).toBe(202);
     const challengeId = response.body.data.challengeId;
@@ -159,7 +180,7 @@ describe("Registration and email verification", () => {
       .select("+passwordHash").lean();
     expect(credential!.passwordHash).toMatch(/^\$argon2id\$/u);
     expect(await verifyPassword(credential!.passwordHash, password)).toBe(true);
-    expect(await PasswordHistoryModel.countDocuments()).toBe(1);
+    expect(await PasswordHistoryModel.countDocuments()).toBe(0);
     expect(await SecurityEventModel.distinct("eventType")).toEqual(
       expect.arrayContaining(["AUTH_REGISTERED", "AUTH_EMAIL_OTP_SENT"]),
     );
@@ -793,5 +814,229 @@ describe("Refresh rotation and session lifecycle", () => {
     const initial = await login();
     vi.spyOn(SessionModel, "findOne").mockRejectedValueOnce(new Error("Database failure"));
     expect((await sessions(initial.body.data.accessToken)).status).toBe(503);
+  });
+});
+
+
+// Password lifecycle tests use real transactions; outbound email and HIBP stay mocked.
+const replacementPassword = "Meadow!Quartz-Harbor-82";
+const thirdPassword = "Velvet!Comet-Pebble-63";
+function change(access: string, currentPassword = password, newPassword = replacementPassword) {
+  return request(app).post("/api/v1/password/change")
+    .set("Authorization", `Bearer ${access}`).send({ currentPassword, newPassword });
+}
+function requestReset(address = email) {
+  return request(app).post("/api/v1/password/reset/request").send({ email: address });
+}
+function resetCode(): string {
+  return external.sendResetOtp.mock.calls.at(-1)?.[1] as string;
+}
+function confirmReset(otp = resetCode(), newPassword = replacementPassword) {
+  return request(app).post("/api/v1/password/reset/confirm")
+    .send({ email, otp, newPassword });
+}
+
+describe("Password lifecycle", () => {
+  it("changes credentials, archives only the old hash and revokes all sessions", async () => {
+    const user = await seedActiveUser();
+    const first = await login();
+    const second = await login();
+    const result = await change(first.body.data.accessToken);
+    expect(result.status).toBe(200);
+    expect(String(result.headers["set-cookie"])).toContain("Expires=Thu, 01 Jan 1970");
+    const credential = await CredentialModel.findOne({ userId: user._id }).select("+passwordHash");
+    expect(credential?.passwordVersion).toBe(2);
+    expect(await verifyPassword(credential!.passwordHash, replacementPassword)).toBe(true);
+    const history = await PasswordHistoryModel.find().select("+passwordHash");
+    expect(history.map((entry) => entry.passwordHash)).toEqual([loginFixtureHash]);
+    expect((await AuthUserModel.findById(user._id))?.passwordChangedAt).toBeInstanceOf(Date);
+    expect(await SessionModel.countDocuments({ revokedAt: { $exists: false } })).toBe(0);
+    expect(await RefreshTokenModel.countDocuments({ revokedAt: { $exists: false } })).toBe(0);
+    expect((await sessions(second.body.data.accessToken)).status).toBe(401);
+    expect((await refresh(refreshCookie(first))).status).toBe(401);
+    expect((await login()).status).toBe(401);
+    expect((await login(email, replacementPassword)).status).toBe(200);
+    expect(await SecurityEventModel.countDocuments({ eventType: "AUTH_PASSWORD_CHANGED" })).toBe(1);
+    expect(external.sendChanged).toHaveBeenCalledWith(email);
+  });
+
+  it("rejects wrong current passwords, weak replacements and the current password", async () => {
+    await seedActiveUser();
+    const access = (await login()).body.data.accessToken;
+    expect((await change(access, "incorrect-password")).body.error.code).toBe("CURRENT_PASSWORD_INVALID");
+    expect((await change(access, password, "short")).body.error.code).toBe("PASSWORD_POLICY_VIOLATION");
+    expect((await change(access, password, password)).body.error.code).toBe("PASSWORD_RECENTLY_USED");
+    expect(await PasswordHistoryModel.countDocuments()).toBe(0);
+    expect((await CredentialModel.findOne())?.passwordVersion).toBe(1);
+    expect(external.sendChanged).not.toHaveBeenCalled();
+  });
+
+  it("keeps A and B after A to B to C, and rejects returning to A", async () => {
+    await seedActiveUser();
+    // Simulate a legacy registration that seeded its current hash in history.
+    const credential = await CredentialModel.findOne();
+    await PasswordHistoryModel.create({ userId: credential!.userId, passwordHash: loginFixtureHash });
+    expect((await change((await login()).body.data.accessToken)).status).toBe(200);
+    const accessB = (await login(email, replacementPassword)).body.data.accessToken;
+    expect((await change(accessB, replacementPassword, thirdPassword)).status).toBe(200);
+    const history = await PasswordHistoryModel.find().select("+passwordHash");
+    expect(history).toHaveLength(2);
+    expect(await Promise.all(history.map((entry) => verifyPassword(entry.passwordHash, thirdPassword))))
+      .toEqual([false, false]);
+    const accessC = (await login(email, thirdPassword)).body.data.accessToken;
+    expect((await change(accessC, thirdPassword, password)).body.error.code).toBe("PASSWORD_RECENTLY_USED");
+  });
+
+  it("returns generic reset responses for unknown and unavailable accounts", async () => {
+    const unknown = await requestReset();
+    await seedActiveUser();
+    await AuthUserModel.updateMany({}, { $set: { status: "DISABLED" } });
+    const disabled = await requestReset();
+    expect(unknown.status).toBe(202);
+    expect(disabled.status).toBe(202);
+    expect(disabled.body.message).toBe(unknown.body.message);
+    expect(external.sendResetOtp).not.toHaveBeenCalled();
+  });
+
+  it("stores a bound HMAC challenge, enforces cooldown and never stores plaintext", async () => {
+    await seedActiveUser();
+    expect((await requestReset()).status).toBe(202);
+    expect((await requestReset()).status).toBe(202);
+    expect(external.sendResetOtp).toHaveBeenCalledTimes(1);
+    const challenge = await OtpChallengeModel.findOne().select("+otpHash +credentialVersion +maxAttempts");
+    expect(challenge?.purpose).toBe("PASSWORD_RESET");
+    expect(challenge?.credentialVersion).toBe(1);
+    expect(challenge?.maxAttempts).toBe(5);
+    expect(challenge?.otpHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(challenge?.otpHash).not.toBe(resetCode());
+    expect(challenge!.expiresAt.getTime() - challenge!.createdAt.getTime()).toBeGreaterThan(590_000);
+    const stored = JSON.stringify(await OtpChallengeModel.collection.findOne({}));
+    expect(stored).not.toContain(`"${resetCode()}"`);
+    expect(stored).not.toContain(password);
+  });
+
+  it("resets once, revokes old tokens and accepts only the new password", async () => {
+    await seedActiveUser();
+    const loggedIn = await login();
+    await requestReset();
+    const otp = resetCode();
+    expect((await confirmReset(otp)).status).toBe(200);
+    expect((await confirmReset(otp)).body.error.code).toBe("PASSWORD_RESET_INVALID");
+    expect((await sessions(loggedIn.body.data.accessToken)).status).toBe(401);
+    expect((await refresh(refreshCookie(loggedIn))).status).toBe(401);
+    expect((await login()).status).toBe(401);
+    expect((await login(email, replacementPassword)).status).toBe(200);
+    expect((await CredentialModel.findOne())?.passwordVersion).toBe(2);
+    expect(await PasswordHistoryModel.countDocuments()).toBe(1);
+    expect(await SecurityEventModel.countDocuments({ eventType: "AUTH_PASSWORD_RESET_COMPLETED" })).toBe(1);
+  });
+
+  it("does not consume a correct OTP when policy or breach screening rejects", async () => {
+    await seedActiveUser();
+    await requestReset();
+    expect((await confirmReset(resetCode(), "short")).body.error.code).toBe("PASSWORD_POLICY_VIOLATION");
+    external.checkBreachedPassword.mockResolvedValueOnce({ checked: true, breached: true, occurrenceCount: 1 });
+    expect((await confirmReset()).body.error.code).toBe("PASSWORD_COMPROMISED");
+    expect(await OtpChallengeModel.countDocuments({ consumedAt: { $exists: false } })).toBe(1);
+    expect((await confirmReset()).status).toBe(200);
+  });
+
+  it("checks OTP knowledge before revealing current-password or history feedback", async () => {
+    await seedActiveUser();
+    await requestReset();
+    const wrong = resetCode() === "123456" ? "654321" : "123456";
+    expect((await confirmReset(wrong, password)).body.error.code).toBe("PASSWORD_RESET_INVALID");
+    expect(external.checkBreachedPassword).not.toHaveBeenCalled();
+    expect((await confirmReset(resetCode(), password)).body.error.code).toBe("PASSWORD_RECENTLY_USED");
+    expect(await SecurityEventModel.countDocuments({ eventType: "AUTH_PASSWORD_RESET_OTP_FAILURE" })).toBe(1);
+  });
+
+  it("persists the OTP attempt limit and rejects even a correct exhausted code", async () => {
+    await seedActiveUser();
+    await requestReset();
+    const wrong = resetCode() === "123456" ? "654321" : "123456";
+    for (let index = 0; index < 5; index += 1) {
+      expect((await confirmReset(wrong)).status).toBe(400);
+    }
+    expect((await confirmReset()).body.error.code).toBe("PASSWORD_RESET_INVALID");
+    const challenge = await OtpChallengeModel.findOne().select("+attempts");
+    expect(challenge?.attempts).toBe(5);
+    expect((await CredentialModel.findOne())?.passwordVersion).toBe(1);
+  });
+
+  it("rejects expired and wrong-purpose challenges", async () => {
+    await seedActiveUser();
+    await requestReset();
+    await OtpChallengeModel.updateMany({}, { $set: { purpose: "EMAIL_VERIFICATION" } });
+    expect((await confirmReset()).status).toBe(400);
+    await OtpChallengeModel.updateMany({}, {
+      $set: { purpose: "PASSWORD_RESET", expiresAt: new Date(Date.now() - 1000) },
+    });
+    expect((await confirmReset()).status).toBe(400);
+    expect((await CredentialModel.findOne())?.passwordVersion).toBe(1);
+  });
+
+  it("invalidates a reset code when an authenticated password change commits", async () => {
+    await seedActiveUser();
+    const access = (await login()).body.data.accessToken;
+    await requestReset();
+    expect((await change(access)).status).toBe(200);
+    expect((await confirmReset(resetCode(), thirdPassword)).status).toBe(400);
+  });
+
+  it("commits only one concurrent use of a reset code", async () => {
+    await seedActiveUser();
+    await requestReset();
+    const results = await Promise.all([confirmReset(), confirmReset()]);
+    expect(results.map((result) => result.status).sort()).toEqual([200, 400]);
+    expect((await CredentialModel.findOne())?.passwordVersion).toBe(2);
+    expect(await PasswordHistoryModel.countDocuments()).toBe(1);
+    expect(external.sendChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("rolls back credential, history and OTP consumption if the completion audit fails", async () => {
+    await seedActiveUser();
+    await requestReset();
+    const createEvent = SecurityEventModel.create.bind(SecurityEventModel);
+    const spy = vi.spyOn(SecurityEventModel, "create").mockImplementation((...args: any[]) => {
+      if (args[0]?.[0]?.eventType === "AUTH_PASSWORD_RESET_COMPLETED") {
+        return Promise.reject(new Error("test audit unavailable"));
+      }
+      return (createEvent as any)(...args);
+    });
+    expect((await confirmReset()).status).toBe(503);
+    spy.mockRestore();
+    expect((await CredentialModel.findOne())?.passwordVersion).toBe(1);
+    expect(await PasswordHistoryModel.countDocuments()).toBe(0);
+    expect(await OtpChallengeModel.countDocuments({ consumedAt: { $exists: false } })).toBe(1);
+    expect((await confirmReset()).status).toBe(200);
+  });
+
+  it("keeps completed changes successful when security notification delivery fails", async () => {
+    await seedActiveUser();
+    external.sendChanged.mockRejectedValue(new Error("SMTP unavailable"));
+    expect((await change((await login()).body.data.accessToken)).status).toBe(200);
+    expect((await CredentialModel.findOne())?.passwordVersion).toBe(2);
+    expect(await SecurityEventModel.countDocuments({ eventType: "AUTH_SECURITY_NOTIFICATION_FAILURE" })).toBe(1);
+  });
+
+  it("hides reset delivery failure and invalidates the undelivered code", async () => {
+    await seedActiveUser();
+    external.sendResetOtp.mockRejectedValue(new Error("SMTP unavailable"));
+    expect((await requestReset()).status).toBe(202);
+    expect(await OtpChallengeModel.countDocuments({ consumedAt: { $exists: false } })).toBe(0);
+    expect(await SecurityEventModel.countDocuments({ eventType: "AUTH_EMAIL_DELIVERY_FAILURE" })).toBe(1);
+  });
+
+  it("requires authentication, rejects cross-site requests and bounds reset requests", async () => {
+    expect((await change("invalid")).status).toBe(401);
+    expect((await request(app).post("/api/v1/password/reset/request")
+      .set("Origin", "https://attacker.example").send({ email })).status).toBe(403);
+    for (let index = 0; index < 4; index += 1) {
+      expect((await requestReset()).status).toBe(202);
+    }
+    expect((await requestReset()).status).toBe(429);
+    expect((await request(app).post("/api/v1/password/reset/confirm")
+      .send({ email, otp: "<script>", newPassword: replacementPassword })).status).toBe(400);
   });
 });

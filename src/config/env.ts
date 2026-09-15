@@ -57,7 +57,29 @@ const envSchema = z.object({
   OTP_TTL_MINUTES: z.coerce.number().int().min(1).max(30).default(10),
   OTP_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(5),
   OTP_RESEND_COOLDOWN_SECONDS: z.coerce.number().int().min(30).default(60),
+  // Reset policy can be tightened independently from email verification.
+  PASSWORD_RESET_OTP_TTL_MINUTES: z.coerce.number().int().min(5).max(30).default(10),
+  PASSWORD_RESET_MAX_ATTEMPTS: z.coerce.number().int().min(3).max(10).default(5),
+  PASSWORD_RESET_REQUEST_WINDOW_MINUTES: z.coerce.number().int().positive().default(15),
+  PASSWORD_RESET_REQUEST_LIMIT: z.coerce.number().int().positive().default(5),
+  // Rolling failure signals expire independently of MongoDB TTL cleanup.
+  AUTH_FAILURE_WINDOW_MINUTES: z.coerce.number().int().min(1).max(60).default(15),
+  AUTH_ACCOUNT_FAILURE_LIMIT: z.coerce.number().int().min(3).default(8),
+  AUTH_IP_FAILURE_LIMIT: z.coerce.number().int().min(5).default(30),
+  AUTH_PROGRESSIVE_DELAY_AFTER: z.coerce.number().int().min(1).default(3),
+  AUTH_PROGRESSIVE_DELAY_BASE_MS: z.coerce.number().int().min(100).default(500),
+  AUTH_PROGRESSIVE_DELAY_MAX_MS: z.coerce.number().int().min(500).max(10000).default(5000),
+  AUTH_SPRAY_ACCOUNT_THRESHOLD: z.coerce.number().int().min(3).default(8),
+  AUTH_SUSPICIOUS_SCORE_THRESHOLD: z.coerce.number().int().min(1).max(100).default(50),
 }).superRefine((config, context) => {
+  // Keep exponential backoff bounded and reject contradictory settings at startup.
+  if (config.AUTH_PROGRESSIVE_DELAY_BASE_MS > config.AUTH_PROGRESSIVE_DELAY_MAX_MS) {
+    context.addIssue({
+      code: "custom", path: ["AUTH_PROGRESSIVE_DELAY_BASE_MS"],
+      message: "Must not exceed AUTH_PROGRESSIVE_DELAY_MAX_MS.",
+    });
+  }
+
   // Browsers reject SameSite=None without Secure; production requires HTTPS.
   if (!config.COOKIE_SECURE
     && (config.COOKIE_SAME_SITE === "none" || config.NODE_ENV === "production")) {

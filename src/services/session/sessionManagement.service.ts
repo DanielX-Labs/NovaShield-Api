@@ -68,22 +68,27 @@ export async function revokeUserSession(
 export async function revokeAllUserSessions(
   userId: string,
   requestId?: string,
+  transaction?: ClientSession,
 ): Promise<void> {
-  await sessionTransaction(async (transaction) => {
-    const userObjectId = new Types.ObjectId(userId);
-    const now = new Date();
-    // Updating session documents conflicts with concurrent refresh writes.
-    await SessionModel.updateMany({
-      userId: userObjectId, revokedAt: { $exists: false },
-    }, {
-      $set: { revokedAt: now, revokeReason: "USER_REVOKED_ALL" },
-    }, { session: transaction });
-    await RefreshTokenModel.updateMany({
-      userId: userObjectId, revokedAt: { $exists: false },
-    }, { $set: { revokedAt: now } }, { session: transaction });
-    const context: SecurityContext = { requestId: requestId ?? "", ipHash: "" };
-    await recordSecurityEvent(
-      "AUTH_SESSION_REVOKED", context, userObjectId, transaction,
+  // Reuse the caller's transaction so password replacement and revocation are atomic.
+  if (!transaction) {
+    return sessionTransaction((session) =>
+      revokeAllUserSessions(userId, requestId, session),
     );
-  });
+  }
+  const userObjectId = new Types.ObjectId(userId);
+  const now = new Date();
+  // Updating session documents conflicts with concurrent refresh writes.
+  await SessionModel.updateMany({
+    userId: userObjectId, revokedAt: { $exists: false },
+  }, {
+    $set: { revokedAt: now, revokeReason: "USER_REVOKED_ALL" },
+  }, { session: transaction });
+  await RefreshTokenModel.updateMany({
+    userId: userObjectId, revokedAt: { $exists: false },
+  }, { $set: { revokedAt: now } }, { session: transaction });
+  const context: SecurityContext = { requestId: requestId ?? "", ipHash: "" };
+  await recordSecurityEvent(
+    "AUTH_SESSION_REVOKED", context, userObjectId, transaction,
+  );
 }

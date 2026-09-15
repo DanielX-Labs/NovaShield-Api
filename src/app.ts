@@ -10,6 +10,7 @@ import { errorHandler } from "./middleware/error.middleware.js";
 import { healthRouter } from "./routes/health.routes.js";
 import { createAuthRouter } from "./routes/auth.routes.js";
 import { sessionRouter } from "./routes/session.routes.js";
+import { passwordRouter } from "./routes/password.routes.js";
 
 export const app = express();
 app.disable("x-powered-by");
@@ -33,6 +34,7 @@ app.use(cookieParser());
 app.use("/api/v1", healthRouter);
 app.use("/api/v1", createAuthRouter());
 app.use("/api/v1", sessionRouter);
+app.use("/api/v1", passwordRouter);
 
 // Fallback handlers must come after all routes.
 app.use(notFoundHandler);
