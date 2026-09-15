@@ -43,6 +43,7 @@ export async function createSession(
     _id: sessionObjectId,
     userId: input.userId,
     sessionId: publicSessionId,
+    passwordVersion: input.passwordVersion,
     ...(input.userAgent ? { userAgent: input.userAgent.slice(0, 512) } : {}),
     ...(input.ipHash ? { ipHash: input.ipHash } : {}),
     lastSeenAt: now,

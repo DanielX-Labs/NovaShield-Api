@@ -11,14 +11,21 @@ function options(): CookieOptions {
   };
 }
 
-export function setRefreshCookie(res: Response, refreshToken: string): void {
+export function setRefreshCookie(
+  res: Response,
+  refreshToken: string,
+  expiresAt?: Date,
+): void {
   res.cookie(env.REFRESH_COOKIE_NAME, refreshToken, {
     ...options(),
-    maxAge: env.REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000,
+    // Rotation preserves the family's absolute lifetime, including in the browser.
+    maxAge: expiresAt
+      ? Math.max(0, expiresAt.getTime() - Date.now())
+      : env.REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000,
   });
 }
 
-// Prepared for logout and reuse detection in the next session-protocol milestone.
+// Delete with the same attributes used when setting the cookie.
 export function clearRefreshCookie(res: Response): void {
   res.clearCookie(env.REFRESH_COOKIE_NAME, options());
 }

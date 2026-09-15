@@ -9,3 +9,8 @@ export const loginRateLimit = authAbuseLimit(
   env.LOGIN_WINDOW_MINUTES * 60_000,
   true,
 );
+
+// Shared counters protect refresh without requiring an access token.
+export const refreshRateLimit = authAbuseLimit(
+  "refresh-ip", 60, false, 5 * 60_000,
+);

@@ -69,4 +69,5 @@ A live inbox check must use an address controlled by the tester. Registration
 creates a persistent test identity; it is not automatically deleted. Do not
 place real passwords or OTPs in committed fixtures, logs, or screenshots.
 
-Login, sessions, and tokens are not implemented by these endpoints.
+Registration does not automatically create a session. Follow it with
+[login](login.md) and the [session lifecycle](session-lifecycle.md).

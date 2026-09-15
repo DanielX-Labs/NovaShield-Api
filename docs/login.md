@@ -66,5 +66,5 @@ A live development login still requires a genuinely verified account and its
 password. Tests create identities only inside their isolated database.
 
 Refresh rotation, reuse detection, logout, session management, and authenticated
-middleware are the next protocol milestone. No refresh or logout route is exposed
-yet; the cookie-clear helper is prepared for those routes.
+middleware are implemented in the [session lifecycle](session-lifecycle.md).
+Password change/reset and stronger account-keyed abuse defenses remain future work.

@@ -8,9 +8,11 @@ import {
   type createRegistrationService,
 } from "../services/auth/registration.service.js";
 import { securityContext } from "../services/security/securityEvent.service.js";
-import { loginController } from "../controllers/auth.controller.js";
-import { loginRateLimit } from "../middleware/authRateLimit.middleware.js";
+import { loginController, refreshController, logoutController } from "../controllers/auth.controller.js";
+import { loginRateLimit, refreshRateLimit } from "../middleware/authRateLimit.middleware.js";
 import { loginSchema } from "../validators/auth.validators.js";
+import { authenticate } from "../middleware/authenticate.middleware.js";
+import { requireAuthOrigin } from "../middleware/authOrigin.middleware.js";
 
 // Validate and normalize only identity fields; passwords remain byte-for-byte input.
 const emailSchema = z.string().trim().max(254).email().toLowerCase();
@@ -66,14 +68,8 @@ export function createAuthRouter(
 
   router.post("/auth/login",
     loginRateLimit,
+    requireAuthOrigin,
     (req, _res, next) => {
-      // Prevent browser login CSRF; non-browser API clients may omit Origin.
-      const origin = req.get("origin");
-      if ((origin && origin !== env.EXPENSEHUB_ORIGIN)
-        || (!origin && req.get("sec-fetch-site") === "cross-site")) {
-        next(new AppError("Request origin is not allowed.", 403, "ORIGIN_NOT_ALLOWED"));
-        return;
-      }
       const result = loginSchema.safeParse({ body: req.body });
       if (!result.success) {
         next(new AppError("Invalid request fields.", 400, "VALIDATION_ERROR"));
@@ -83,6 +79,14 @@ export function createAuthRouter(
       next();
     },
     loginController,
+  );
+
+  router.post("/auth/refresh",
+    refreshRateLimit, requireAuthOrigin, refreshController,
+  );
+  router.post("/auth/logout",
+    authAbuseLimit("logout-ip", 60, false, 5 * 60_000),
+    requireAuthOrigin, authenticate, logoutController,
   );
 
   router.post("/email/resend",
