@@ -10,7 +10,7 @@ credential failure as incorrect passwords.
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `AUTH_FAILURE_WINDOW_MINUTES` | 15 | Rolling window of failures |
-| `AUTH_ACCOUNT_FAILURE_LIMIT` | 8 | Temporary refusal per protected email identity |
+| `AUTH_ACCOUNT_FAILURE_LIMIT` | 8 | Admission limit per protected email/IP pair |
 | `AUTH_IP_FAILURE_LIMIT` | 30 | Temporary refusal per protected IP |
 | `AUTH_PROGRESSIVE_DELAY_AFTER` | 3 | First delayed login after this many failures |
 | `AUTH_PROGRESSIVE_DELAY_BASE_MS` | 500 | Initial delay |
@@ -23,26 +23,14 @@ The event loop remains available during the delay. Requests already over a refus
 threshold return 429 immediately without holding a timer or invoking Argon2.
 Database failure fails closed with a generic 503.
 
-## Temporary refusal and recovery
+## Admission, delay and recovery
 
-Throttling never changes `AuthUser.status` or permanently locks an identity.
-Only `FAILURE` records influence the rolling counters. `BLOCKED` and `SUCCESS`
-records do not increase those counters. Blocked requests therefore cannot extend
-the window indefinitely. Old failures stop influencing the assessment based on
-an explicit timestamp query; recovery does not depend on MongoDB TTL deletion.
-
-Account-level refusal still has an availability tradeoff: an attacker can cause a
-legitimate account to receive 429 until enough failures age out. The correct
-password does not bypass that refusal. These development thresholds require tuning.
-Successful login resets the existing user failure counter but preserves attempt
-telemetry, since failures followed by success can be an important risk signal.
-
-The assessment uses completed attempts, not an atomic admission reservation.
-Concurrent requests may pass the same pre-verification snapshot and exceed a
-failure threshold before their outcomes are recorded. The outer IP limiter counts
-in-flight requests immediately, but distributed attempts can still exceed the
-account threshold within a burst. Exact distributed admission limits remain a
-production-hardening consideration; no permanent lockout is used as a workaround.
+Atomic admission limits IP and account/IP reservations before password verification.
+Account-wide failures add delay and risk signals but cannot lock the identity across
+all sources. Success refunds reservations; failures retain them until their window ends.
+A per-process Argon2 concurrency cap rejects excess work without an unbounded queue.
+See [production operations](production.md) for the source-bucket policy, fixed-window
+tradeoffs and capacity planning. Rolling risk telemetry is preserved after success.
 
 ## Signals and storage
 
@@ -95,4 +83,4 @@ concurrent failure recording and transaction failures.
 Express proxy trust remains disabled for local development. Configure the actual
 trusted proxy boundary before deployment rather than trusting arbitrary forwarded
 headers. `LOGIN_ACCOUNT_LIMIT` is a legacy unused setting; the abuse engine uses
-`AUTH_ACCOUNT_FAILURE_LIMIT`. Production hardening is the next milestone.
+`AUTH_ACCOUNT_FAILURE_LIMIT`. Production safeguards and external release gates are documented in [production operations](production.md).

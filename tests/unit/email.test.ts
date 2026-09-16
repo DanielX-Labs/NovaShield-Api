@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // Mock SMTP and logging so no email is sent and no credentials are needed.
 const mocks = vi.hoisted(() => ({
   sendMail: vi.fn(),
-  verify: vi.fn(),
+  verify: vi.fn().mockResolvedValue(true),
   createTransport: vi.fn(),
   transportOptions: {} as Record<string, unknown>,
   info: vi.fn(),
@@ -17,7 +17,7 @@ vi.mock("nodemailer", () => ({
   },
 }));
 vi.mock("../../src/config/logger.js", () => ({
-  logger: { info: mocks.info },
+  logger: { info: mocks.info, error: vi.fn() },
 }));
 vi.mock("../../src/config/env.js", () => ({
   env: {
@@ -45,7 +45,7 @@ beforeEach(() => {
 
 describe("Email boundary", () => {
   it("requires TLS and sends plain text plus HTML", async () => {
-    await sendVerificationOtpEmail("customer@example.com", "123456");
+    await sendVerificationOtpEmail("customer@example.com", "123456", new Date("2030-01-01T12:01:00Z"));
     expect(mocks.transportOptions).toEqual(
       expect.objectContaining({ secure: false, requireTLS: true }),
     );
@@ -53,7 +53,7 @@ describe("Email boundary", () => {
       to: "customer@example.com",
       replyTo: "support@example.com",
       text: expect.stringContaining("123456"),
-      html: expect.stringContaining("10 minutes"),
+      html: expect.stringContaining("2030-01-01T12:01:00.000Z"),
     }));
     expect(mocks.info).toHaveBeenCalledWith(
       { messageId: "message-1" },
@@ -87,9 +87,10 @@ describe("Email boundary", () => {
 // Templates use their own expiry and do not include credentials in change notices.
 describe("Password lifecycle email", () => {
   it("uses the reset expiry and rejects nonnumeric template input", async () => {
-    await sendPasswordResetOtpEmail("customer@example.com", "123456");
+    await sendPasswordResetOtpEmail("customer@example.com", "123456",
+      new Date("2030-01-01T12:02:00Z"), "0123456789abcdef01234567");
     expect(mocks.sendMail).toHaveBeenCalledWith(expect.objectContaining({
-      text: expect.stringContaining("15 minutes"),
+      text: expect.stringContaining("2030-01-01T12:02:00.000Z"),
       html: expect.stringContaining("123456"),
     }));
     await expect(sendPasswordResetOtpEmail("customer@example.com", "<script>"))

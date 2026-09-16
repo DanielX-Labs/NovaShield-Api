@@ -16,6 +16,17 @@ Refresh takes no request body. Browsers must send cookies and an allowed Origin.
 Native API clients can omit Origin. Mutation routes reject untrusted browser
 origins; CORS alone is not treated as CSRF protection.
 
+Session listing accepts `?limit=20&cursor=<sessionId>` (limit 1–50, default 20).
+The response retains `data.sessions` and adds `data.nextCursor`, or null on the last
+page. Follow that cursor unchanged. Ordering uses immutable public session IDs;
+concurrent additions/revocations are not a snapshot. Internal IDs and IP hashes remain
+excluded. Invalid or unexpected query parameters return 400.
+
+`MAX_ACTIVE_SESSIONS=20` bounds active unexpired sessions per identity (configurable
+from 1 to 100). A transactional identity write serializes concurrent admission.
+At capacity, login returns `409 ACTIVE_SESSION_LIMIT` without issuing credentials.
+Revoke an existing session to free a slot; password reset also revokes all sessions.
+
 ## Rotation and replay
 
 The adapter parses the exact opaque-token format, explicitly selects its hidden

@@ -27,7 +27,7 @@ export const errorHandler: ErrorRequestHandler = (error: unknown, req, res, next
   }
   if (error instanceof AppError) {
     if (error.statusCode >= 500) {
-      logger.error({ err: error, requestId }, "Operational server error");
+      logger.error({ err: error, requestId, operation: "http.request" }, "Operational server error");
     }
     res.status(error.statusCode).json({
       success: false,
@@ -38,7 +38,7 @@ export const errorHandler: ErrorRequestHandler = (error: unknown, req, res, next
   }
 
   // Diagnostics stay on the server; unexpected errors get a generic response.
-  logger.error({ err: error, requestId }, "Unhandled application error");
+  logger.error({ err: error, requestId, operation: "http.request" }, "Unhandled application error");
   res.status(500).json({
     success: false,
     error: {

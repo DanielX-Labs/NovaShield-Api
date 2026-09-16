@@ -22,7 +22,7 @@ const password = "Orbit-Cedar!Lantern-47";
 describe("Argon2id password hashing", () => {
   it("verifies correct passwords and rejects incorrect passwords", async () => {
     const hash = await hashPassword(password);
-    expect(hash.startsWith("$argon2id$")).toBe(true);
+    expect(hash.includes("$argon2id$")).toBe(true);
     await expect(verifyPassword(hash, password)).resolves.toBe(true);
     await expect(verifyPassword(hash, "Wrong-Password-99"))
       .resolves.toBe(false);
@@ -39,11 +39,11 @@ describe("Argon2id password hashing", () => {
 
   it("requires the same pepper", async () => {
     const hash = await hashPassword(password);
-    await expect(argon2.verify(hash, password)).resolves.toBe(false);
-    await expect(argon2.verify(hash, password + "different-pepper"))
+    await expect(argon2.verify(hash.slice(hash.indexOf("$argon2")), password)).resolves.toBe(false);
+    await expect(argon2.verify(hash.slice(hash.indexOf("$argon2")), password + "different-pepper"))
       .resolves.toBe(false);
     await expect(argon2.verify(
-      hash,
+      hash.slice(hash.indexOf("$argon2")),
       password + "test-only-pepper-never-use-in-production",
     )).resolves.toBe(true);
   });

@@ -6,7 +6,7 @@ import { AppError } from "../utils/AppError.js";
 export const requireAuthOrigin: RequestHandler = (req, _res, next) => {
   const origin = req.get("origin");
   if ((origin && origin !== env.EXPENSEHUB_ORIGIN)
-    || (!origin && req.get("sec-fetch-site") === "cross-site")) {
+    || (!origin && ["cross-site", "same-site"].includes(req.get("sec-fetch-site") ?? ""))) {
     next(new AppError("Request origin is not allowed.", 403, "ORIGIN_NOT_ALLOWED"));
     return;
   }

@@ -9,11 +9,19 @@ import { AppError } from "../utils/AppError.js";
 export const listSessionsController: RequestHandler = async (req, res, next) => {
   try {
     if (!req.auth) throw new AppError("Authentication is required.", 401);
-    const sessions = await listUserSessions(req.auth.userId);
+    const query = z.object({
+      limit: z.coerce.number().int().min(1).max(50).default(20),
+      cursor: z.string().uuid().optional(),
+    }).strict().safeParse(req.query);
+    if (!query.success) throw new AppError("Invalid session pagination.", 400, "VALIDATION_ERROR");
+    const page = await listUserSessions(req.auth.userId, {
+      limit: query.data.limit,
+      ...(query.data.cursor ? { cursor: query.data.cursor } : {}),
+    });
     // A response allowlist keeps database identifiers and network hashes private.
     res.json({
       success: true,
-      data: { sessions: sessions.map((session) => ({
+      data: { nextCursor: page.nextCursor, sessions: page.sessions.map((session) => ({
         sessionId: session.sessionId,
         userAgent: session.userAgent,
         lastSeenAt: session.lastSeenAt,

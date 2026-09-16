@@ -10,7 +10,7 @@ export async function connectDatabase(): Promise<void> {
     await initializeAuthStorage();
     logger.info("MongoDB connection established");
   } catch (error) {
-    logger.error({ err: error }, "MongoDB connection failed");
+    logger.error({ err: error, operation: "database.connect" }, "MongoDB connection failed");
     throw error;
   }
 }
@@ -20,12 +20,18 @@ export async function disconnectDatabase(): Promise<void> {
     await mongoose.disconnect();
     logger.info("MongoDB connection closed");
   } catch (error) {
-    logger.error({ err: error }, "Failed to close MongoDB connection");
+    logger.error({ err: error, operation: "database.disconnect" }, "Failed to close MongoDB connection");
     throw error;
   }
 }
 
-export function isDatabaseReady(): boolean {
-  // Mongoose state 1 means an active database connection.
-  return mongoose.connection.readyState === 1;
+let draining = false;
+export function markDatabaseDraining(): void { draining = true; }
+export async function isDatabaseReady(): Promise<boolean> {
+  if (draining || mongoose.connection.readyState !== 1 || !mongoose.connection.db) return false;
+  try {
+    // Ping the database instead of relying only on the driver's cached connection state.
+    await mongoose.connection.db.command({ ping: 1 }, { timeoutMS: 1500 });
+    return !draining;
+  } catch { return false; }
 }

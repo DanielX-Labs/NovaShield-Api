@@ -27,16 +27,32 @@ export async function revokeSessionRecords(
   }, { $set: { revokedAt: now } }, { session: transaction });
 }
 
-export async function listUserSessions(userId: string) {
+export async function listUserSessions(
+  userId: string,
+  options: { limit?: number; cursor?: string } = {},
+) {
+  const limit = options.limit ?? 20;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 50
+    || (options.cursor && !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu.test(options.cursor))) {
+    throw new AppError("Invalid session pagination.", 400, "VALIDATION_ERROR");
+  }
   // Explicit projection excludes internal IDs and network identifiers.
-  return SessionModel.find({
+  const sessions = await SessionModel.find({
     userId: new Types.ObjectId(userId),
     revokedAt: { $exists: false },
     expiresAt: { $gt: new Date() },
+    ...(options.cursor ? { sessionId: { $gt: options.cursor.toLowerCase() } } : {}),
   })
-    .sort({ lastSeenAt: -1 })
+    .sort({ sessionId: 1 })
+    .limit(limit + 1)
     .select("-_id sessionId userAgent lastSeenAt expiresAt createdAt")
     .lean();
+  const hasMore = sessions.length > limit;
+  const page = sessions.slice(0, limit);
+  return {
+    sessions: page,
+    nextCursor: hasMore ? page.at(-1)!.sessionId : null,
+  };
 }
 
 export async function revokeUserSession(

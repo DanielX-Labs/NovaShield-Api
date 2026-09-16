@@ -5,52 +5,16 @@ import request from "supertest";
 import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Use the same isolated replica-set pattern as the lifecycle integration suite.
-vi.mock("../../src/config/env.js", () => ({
-  env: {
-    AUTH_FAILURE_WINDOW_MINUTES: 15,
-    AUTH_ACCOUNT_FAILURE_LIMIT: 8,
-    AUTH_IP_FAILURE_LIMIT: 30,
-    AUTH_PROGRESSIVE_DELAY_AFTER: 3,
-    AUTH_PROGRESSIVE_DELAY_BASE_MS: 500,
-    AUTH_PROGRESSIVE_DELAY_MAX_MS: 5000,
-    AUTH_SPRAY_ACCOUNT_THRESHOLD: 8,
-    AUTH_SUSPICIOUS_SCORE_THRESHOLD: 50,
-    NODE_ENV: "test",
-    APP_NAME: "NovaShield-test",
-    EXPENSEHUB_ORIGIN: "http://localhost:3000",
-    AUTH_PEPPER: "integration-test-pepper-not-a-production-secret",
-    IP_HASH_SECRET: "integration-network-secret-not-for-production",
-    JWT_ACCESS_SECRET: "integration-jwt-secret-not-for-production",
-    ACCESS_TOKEN_TTL_MINUTES: 15,
-    REFRESH_TOKEN_TTL_DAYS: 7,
-    REFRESH_COOKIE_NAME: "novashield_refresh",
-    COOKIE_SECURE: false,
-    COOKIE_SAME_SITE: "lax",
-    LOGIN_WINDOW_MINUTES: 15,
-    LOGIN_IP_LIMIT: 5,
-    PASSWORD_MIN_LENGTH: 15,
-    PASSWORD_MAX_LENGTH: 128,
-    ARGON2_MEMORY_COST: 19456,
-    ARGON2_TIME_COST: 2,
-    ARGON2_PARALLELISM: 1,
-    PASSWORD_HISTORY_LIMIT: 5,
-    BREACHED_PASSWORD_FAIL_MODE: "closed",
-    PASSWORD_RESET_OTP_TTL_MINUTES: 10,
-    PASSWORD_RESET_MAX_ATTEMPTS: 5,
-    PASSWORD_RESET_REQUEST_WINDOW_MINUTES: 15,
-    PASSWORD_RESET_REQUEST_LIMIT: 5,
-    OTP_TTL_MINUTES: 10,
-    OTP_MAX_ATTEMPTS: 5,
-    OTP_RESEND_COOLDOWN_SECONDS: 60,
-  },
+vi.mock("../../src/config/env.js", async () => ({
+  env: { ...(await import("../helpers/testEnv.js")).testEnv },
 }));
-
 const timing = vi.hoisted(() => ({ delay: vi.fn() }));
 vi.mock("../../src/utils/delay.js", () => ({ delay: timing.delay }));
 vi.mock("../../src/config/logger.js", async () => {
   const { default: pino } = await import("pino");
   return { logger: pino({ level: "silent" }) };
 });
+import { admitLogin, releaseAdmission } from "../../src/services/security/authAdmission.service.js";
 import { app } from "../../src/app.js";
 import { initializeAuthStorage } from "../../src/config/authStorage.js";
 import { AuthAttemptModel } from "../../src/models/AuthAttempt.model.js";
@@ -90,9 +54,8 @@ beforeEach(async () => {
   vi.restoreAllMocks();
   timing.delay.mockReset().mockResolvedValue(undefined);
   // Clean only collections inside the randomly named test database.
-  for (const collection of Object.values(mongoose.connection.collections)) {
-    await collection.deleteMany({});
-  }
+  await Promise.all(Object.values(mongoose.connection.collections)
+    .map(collection => collection.deleteMany({})));
 });
 afterAll(async () => {
   try {
@@ -151,28 +114,28 @@ describe("Local authentication abuse defense", () => {
     expect((await AuthUserModel.findById(user._id).select("+failedLoginCount"))?.failedLoginCount).toBe(0);
   });
 
-  it("temporarily blocks an account across IPs without changing its status", async () => {
+  it("allows a correct password from another IP despite account-wide failures", async () => {
     await seedUser();
     await seedFailures(8);
     await expect(attempt(password, email, "different-network"))
-      .rejects.toMatchObject({ statusCode: 429, code: "AUTH_RATE_LIMITED" });
-    expect(await SessionModel.countDocuments()).toBe(0);
+      .resolves.toHaveProperty("accessToken");
+    expect(await SessionModel.countDocuments()).toBe(1);
     expect((await AuthUserModel.findOne())?.status).toBe("ACTIVE");
-    expect(await AuthAttemptModel.countDocuments({ outcome: "BLOCKED" })).toBe(1);
+    expect(await AuthAttemptModel.countDocuments({ outcome: "BLOCKED" })).toBe(0);
     expect(await AuthAttemptModel.countDocuments({ outcome: "FAILURE" })).toBe(8);
-    expect(await SecurityEventModel.countDocuments({ eventType: "AUTH_RATE_LIMITED" })).toBe(1);
-    expect(timing.delay).not.toHaveBeenCalled();
+    expect(await SecurityEventModel.countDocuments({ eventType: "AUTH_RATE_LIMITED" })).toBe(0);
+    expect(timing.delay).toHaveBeenCalledWith(5000);
   });
 
   it("recovers when failures age out even while blocked records remain", async () => {
     await seedUser();
-    await seedFailures(8);
+    await seedFailures(30, 10);
     await expect(attempt()).rejects.toMatchObject({ code: "AUTH_RATE_LIMITED" });
     await AuthAttemptModel.collection.updateMany({ outcome: "FAILURE" }, {
       $set: { createdAt: new Date(Date.now() - 16 * 60_000) },
     });
     await expect(attempt()).resolves.toHaveProperty("accessToken");
-    expect(await AuthAttemptModel.countDocuments()).toBe(10);
+    expect(await AuthAttemptModel.countDocuments()).toBe(32);
     expect(timing.delay).not.toHaveBeenCalled();
   });
 
@@ -240,4 +203,18 @@ describe("Local authentication abuse defense", () => {
     expect(risk.distinctAccountsFromIp).toBe(0);
     expect(risk.blocked).toBe(false);
   });
+});
+
+// These test admission itself: successful reservations deliberately remain in flight.
+describe("Atomic admission", () => {
+  it("admits exactly eight simultaneous requests for one account/source pair", async () => {
+    const results = await Promise.allSettled(Array.from({ length: 12 }, () => admitLogin(email, ipHash)));
+    expect(results.filter(result => result.status === "fulfilled")).toHaveLength(8);
+    expect(results.filter(result => result.status === "rejected")).toHaveLength(4);
+    // Other networks remain available; there is no globally lockable account bucket.
+    await expect(admitLogin(email, "independent-network")).resolves.toHaveProperty("ids");
+    const first = results.find(result => result.status === "fulfilled");
+    if (first?.status === "fulfilled") await releaseAdmission(first.value);
+    await expect(admitLogin(email, ipHash)).resolves.toHaveProperty("ids");
+  }, 60_000);
 });

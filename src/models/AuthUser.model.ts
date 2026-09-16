@@ -7,6 +7,7 @@ export interface AuthUser {
   isEmailVerified: boolean;
   status: AuthUserStatus;
   failedLoginCount: number;
+  sessionAdmissionVersion: number;
   lastFailedLoginAt?: Date;
   lastSuccessfulLoginAt?: Date;
   passwordChangedAt?: Date;
@@ -26,6 +27,8 @@ const authUserSchema = new Schema<AuthUser>(
     isEmailVerified: { type: Boolean, default: false, index: true },
     status: { type: String, enum: ["PENDING_VERIFICATION", "ACTIVE", "SUSPENDED", "DISABLED"], default: "PENDING_VERIFICATION", index: true },
     failedLoginCount: { type: Number, default: 0, min: 0, select: false },
+    // A write fence serializes session admission even outside LoginService.
+    sessionAdmissionVersion: { type: Number, default: 0, select: false },
     lastFailedLoginAt: { type: Date, select: false },
     lastSuccessfulLoginAt: { type: Date },
     passwordChangedAt: { type: Date },

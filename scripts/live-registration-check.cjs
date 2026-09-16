@@ -43,7 +43,7 @@ async function inspect(state, password, otp) {
       userId: user._id,
     }).toArray();
     if (!credential || !challenge) throw new Error("EXPECTED_RECORD_MISSING");
-    if (!credential.passwordHash.startsWith("$argon2id$")
+    if (!credential.passwordHash.includes("$argon2id$")
       || !/^[a-f0-9]{64}$/.test(challenge.otpHash)) {
       throw new Error("UNEXPECTED_HASH_FORMAT");
     }

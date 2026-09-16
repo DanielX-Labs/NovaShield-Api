@@ -77,7 +77,21 @@ export async function checkBreachedPassword(
     }
 
     // The timeout remains active while reading the body as well.
-    const occurrenceCount = findHashSuffix(await response.text(), suffix);
+    // Bound provider response memory as well as elapsed time.
+    const reader = response.body?.getReader();
+    if (!reader) throw new BreachedPasswordServiceError("Empty breach response.");
+    const chunks: Uint8Array[] = [];
+    let bytes = 0;
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        bytes += chunk.value.length;
+        if (bytes > 1024 * 1024) throw new BreachedPasswordServiceError("Breach response exceeds limit.");
+        chunks.push(chunk.value);
+      }
+    } finally { await reader.cancel(); }
+    const occurrenceCount = findHashSuffix(Buffer.concat(chunks).toString("utf8"), suffix);
     return {
       breached: occurrenceCount > 0,
       occurrenceCount,

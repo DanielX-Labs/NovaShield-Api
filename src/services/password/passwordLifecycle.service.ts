@@ -8,8 +8,7 @@ import { validatePasswordChange } from "./password.service.js";
 import { hashPassword, verifyPassword } from "./passwordHash.service.js";
 import { revokeAllUserSessions } from "../session/sessionManagement.service.js";
 import { recordSecurityEvent } from "../security/securityEvent.service.js";
-import { sendPasswordChangedEmail } from "../email/email.service.js";
-import { logger } from "../../config/logger.js";
+import { enqueueEmail } from "../email/emailOutbox.service.js";
 
 export interface CredentialSnapshot {
   userId: Types.ObjectId;
@@ -80,26 +79,7 @@ export async function replaceCredential(
   await recordSecurityEvent(
     eventType, { requestId, ipHash: "" }, user._id, transaction, "MEDIUM",
   );
-}
-
-export async function notifyPasswordChanged(
-  userId: Types.ObjectId,
-  email: string,
-  requestId: string,
-): Promise<void> {
-  try {
-    // The security transaction has already committed before delivery is attempted.
-    await sendPasswordChangedEmail(email);
-  } catch {
-    try {
-      await recordSecurityEvent(
-        "AUTH_SECURITY_NOTIFICATION_FAILURE",
-        { requestId, ipHash: "" },
-        userId, undefined, "LOW",
-      );
-    } catch {
-      // Even audit unavailability must not turn a completed change into a failure.
-      logger.warn({ requestId }, "Password notification could not be recorded.");
-    }
-  }
+  // Queue the notification atomically, before committing the credential change.
+  await enqueueEmail({ userId: user._id, email, kind: "PASSWORD_CHANGED", requestId,
+    expiresAt: new Date(Date.now() + 7 * 86400_000) }, transaction);
 }

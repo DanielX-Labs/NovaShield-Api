@@ -11,6 +11,8 @@ export interface OtpChallenge {
   maxAttempts: number;
   // Reset challenges cannot authorize changes against a newer credential.
   credentialVersion?: number;
+  resetProtocolVersion?: number;
+  verificationProtocolVersion?: number;
   consumedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -28,6 +30,8 @@ const otpChallengeSchema = new Schema<OtpChallenge>(
     attempts: { type: Number, default: 0, min: 0, select: false },
     maxAttempts: { type: Number, required: true, min: 1, select: false },
     credentialVersion: { type: Number, min: 1, select: false },
+    resetProtocolVersion: { type: Number, enum: [2], select: false },
+    verificationProtocolVersion: { type: Number, enum: [2], select: false },
     consumedAt: { type: Date, select: false },
   },
   {

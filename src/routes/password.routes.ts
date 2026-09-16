@@ -31,13 +31,12 @@ passwordRouter.post("/password/change",
   changePasswordController,
 );
 
-// Apply an IP budget before parsing and an identity budget after normalization.
+// Source admission is separate from transactional email issuance budgets.
 const resetWindow = env.PASSWORD_RESET_REQUEST_WINDOW_MINUTES * 60_000;
 passwordRouter.post("/password/reset/request",
   authAbuseLimit("password-reset-ip", env.PASSWORD_RESET_REQUEST_LIMIT, false, resetWindow),
   requireAuthOrigin,
   validate(passwordResetRequestSchema),
-  authAbuseLimit("password-reset-email", env.PASSWORD_RESET_REQUEST_LIMIT, true, resetWindow),
   passwordResetRequestController,
 );
 
@@ -46,6 +45,5 @@ passwordRouter.post("/password/reset/confirm",
   authAbuseLimit("password-reset-confirm-ip", 10),
   requireAuthOrigin,
   validate(passwordResetConfirmSchema),
-  authAbuseLimit("password-reset-confirm-email", 10, true),
   passwordResetConfirmController,
 );

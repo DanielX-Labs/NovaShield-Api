@@ -8,8 +8,8 @@ healthRouter.get("/health", (_req, res) => {
   res.status(200).json({ status: "ok", service: "NovaShield", timestamp: new Date().toISOString() });
 });
 
-healthRouter.get("/ready", (_req, res) => {
-  if (!isDatabaseReady()) {
+healthRouter.get("/ready", async (_req, res) => {
+  if (!await isDatabaseReady()) {
     res.status(503).json({ status: "not_ready" });
     return;
   }

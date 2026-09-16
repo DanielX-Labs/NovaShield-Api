@@ -9,7 +9,7 @@ and `Cache-Control: no-store`.
 | --- | --- | --- |
 | `POST /password/change` | Bearer access token | `currentPassword`, `newPassword` |
 | `POST /password/reset/request` | None | `email` |
-| `POST /password/reset/confirm` | Reset OTP | `email`, `otp`, `newPassword` |
+| `POST /password/reset/confirm` | Emailed challenge ID and OTP | `email`, `challengeId`, `otp`, `newPassword` |
 
 Change and confirmation return 200 and clear the refresh cookie. Every existing
 session is revoked, including the requesting session. Sign in again with the new
@@ -42,9 +42,18 @@ Current-password reuse is checked separately, including when history is empty.
 
 Reset codes are six-digit cryptographically generated values. MongoDB stores only
 challenge-bound HMAC hashes. Verification enforces purpose, target, credential
-version, expiry, single use and a persisted attempt budget. Reissuing a reset code
-invalidates earlier reset challenges and shares the configured resend cooldown.
+version, expiry, single use and a persisted attempt budget. Confirmation also requires
+the unpredictable 96-bit challenge ID included only in the email, not the request
+response. Wrong locators cannot consume another challenge's attempts. Existing usable
+reset challenges are preserved when strangers request another code. New issuance
+replaces expired/exhausted challenges and shares the configured resend cooldown.
 Password replacement invalidates all outstanding challenges for the identity.
+
+Source request limits protect HTTP work. A separate transactional per-user budget
+counts actual reset emails, with the same generic 202 response when exhausted.
+There is no email-wide request or confirmation counter. Reset challenges created
+before protocol version 2 are rejected and their queued emails discarded; request a
+new reset email after rollout. Clients must collect both values from the email.
 
 Configuration defaults:
 
@@ -61,15 +70,10 @@ password endpoints retain their own budgets. Permanent account lockouts are not 
 
 ## Email and failure handling
 
-Reset email is sent after the issuance transaction. Failed delivery invalidates
-that challenge and records an event when storage remains available. A crash between
-commit and send can lose delivery; request another code after the cooldown.
-
-Password-changed notifications run after the replacement transaction commits.
-Notification failure records `AUTH_SECURITY_NOTIFICATION_FAILURE` when possible
-and does not report a successfully changed password as failed. Delivery is best
-effort: a durable notification outbox and automatic retries remain future work.
-Notifications contain no password or token. Audit events never copy request bodies.
+Reset codes and password-change notices are encrypted and queued in the same MongoDB
+transaction as their security state. The worker delivers and retries after commit.
+Delivery failure does not change the successful HTTP response. See
+[production operations](production.md) for outbox guarantees and retention.
 
 ## Verification
 

@@ -22,20 +22,19 @@ credentials. Ineligible requests return an inert challenge ID.
 MongoDB must support replica-set transactions. Startup prepares collections and
 adds the required indexes without dropping existing indexes.
 
-Registration atomically creates AuthUser, Credential, OtpChallenge, and
-AUTH_REGISTERED. Password history starts empty and archives replaced credentials. SMTP runs after commit so transaction retries
-cannot send duplicate emails. A failed send leaves the identity pending,
-invalidates the challenge, records AUTH_EMAIL_DELIVERY_FAILURE, and returns 503.
-The caller can resend after the cooldown. A process crash between commit and SMTP
-can also leave a pending account; resend recovers it. Durable email delivery via
-an outbox is not part of this milestone.
+Registration atomically creates AuthUser, Credential, OtpChallenge, an encrypted
+EmailOutbox job, and AUTH_REGISTERED. Password history starts empty. SMTP never runs
+in the HTTP request. Failed delivery is retried by the worker and does not change
+registration's public HTTP 202 response. See [production operations](production.md)
+for outbox leasing, expiry, duplicate-delivery semantics and key management.
 
 Successful provider acceptance records AUTH_EMAIL_OTP_SENT or
 AUTH_EMAIL_OTP_RESENT. It does not prove inbox delivery. Successful verification
 consumes outstanding verification challenges, activates only a pending identity,
 and records AUTH_EMAIL_VERIFIED in one transaction.
 
-Only Argon2id hashes and challenge-bound HMACs are stored. Audit events accept
+Credential records store versioned Argon2id envelopes; challenge records store HMACs.
+Outbox jobs temporarily hold encrypted recipients and codes under a separate key. Audit events accept
 only selected context; raw bodies, passwords, OTPs, email addresses and raw IPs
 are not copied into event metadata.
 
@@ -45,7 +44,9 @@ MongoDB-backed counters enforce fixed 15-minute windows across API processes:
 
 - Registration: 10 requests per IP.
 - Resend: 10 requests per IP.
-- Registration and resend combined: 5 requests per normalized email.
+- Verification delivery: 5 actual email jobs per user per window, reserved in the
+  issuance transaction. Anonymous and duplicate requests do not consume this quota;
+  unavailable issuance still returns the generic response.
 - Verification: 50 requests per IP, plus the configured per-challenge attempt cap.
 
 HTTP 429 includes Retry-After. Counters store HMAC identifiers and have TTL cleanup.

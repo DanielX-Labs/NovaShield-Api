@@ -1,4 +1,5 @@
 import { AuthAttemptModel } from "../models/AuthAttempt.model.js";
+import { EmailOutboxModel } from "../models/EmailOutbox.model.js";
 import mongoose from "mongoose";
 import { AuthUserModel } from "../models/AuthUser.model.js";
 import { CredentialModel } from "../models/Credential.model.js";
@@ -22,6 +23,7 @@ export async function initializeAuthStorage(): Promise<void> {
   for (const model of [
     AuthUserModel,
     AuthAttemptModel,
+    EmailOutboxModel,
     CredentialModel,
     OtpChallengeModel,
     PasswordHistoryModel,

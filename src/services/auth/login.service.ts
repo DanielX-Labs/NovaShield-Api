@@ -1,8 +1,12 @@
 import { assessLoginAbuse, recordAuthAttempt } from "../security/authAbuse.service.js";
+import { hashPassword, needsPasswordRehash } from "../password/passwordHash.service.js";
+import { CredentialModel } from "../../models/Credential.model.js";
 import { delay } from "../../utils/delay.js";
+import { admitLogin, releaseAdmission, type Admission } from "../security/authAdmission.service.js";
 import mongoose from "mongoose";
 import { AuthUserModel } from "../../models/AuthUser.model.js";
 import { env } from "../../config/env.js";
+import { logger } from "../../config/logger.js";
 import { normalizeEmail } from "../../utils/email.js";
 import { AppError } from "../../utils/AppError.js";
 import { validatePassword } from "../password/password.service.js";
@@ -39,7 +43,20 @@ export async function loginUser(input: LoginInput) {
 
   const email = normalizeEmail(input.email);
   const attemptContext = { email, ...(input.ipHash ? { ipHash: input.ipHash } : {}) };
+  let admission: Admission | undefined;
   try {
+    // Reserve source budgets atomically before querying risk or invoking Argon2.
+    try {
+      admission = await admitLogin(email, input.ipHash ?? "unknown-source");
+    } catch (error) {
+      if (error instanceof AppError && error.code === "AUTH_RATE_LIMITED") {
+        await mongoose.connection.transaction(async (session) => {
+          await recordAuthAttempt({ ...attemptContext, outcome: "BLOCKED", reason: "RATE_LIMITED" }, session);
+          await recordSecurityEvent("AUTH_RATE_LIMITED", context, undefined, session, "MEDIUM");
+        });
+      }
+      throw error;
+    }
     // Assessment precedes account lookup and expensive password verification.
     const abuse = await assessLoginAbuse(attemptContext);
     if (abuse.suspicious || abuse.blocked) {
@@ -111,6 +128,9 @@ export async function loginUser(input: LoginInput) {
       throw invalidCredentials();
     }
 
+    // Rehash only after successful verification; compare-and-swap inside the login transaction.
+    const upgradedHash = needsPasswordRehash(credential.passwordHash)
+      ? await hashPassword(input.password) : undefined;
     // Recheck identity state and the credential after expensive verification.
     // Updating AuthUser serializes login against account-state changes.
     const result = await mongoose.connection.transaction(async (session) => {
@@ -146,12 +166,19 @@ export async function loginUser(input: LoginInput) {
         return { unavailable: true as const };
       }
 
+      if (upgradedHash) {
+        await CredentialModel.updateOne({ _id: currentCredential._id,
+          passwordHash: credential.passwordHash, passwordVersion: credential.passwordVersion }, {
+          $set: { passwordHash: upgradedHash },
+        }, { session });
+      }
       const tokens = await createSession({
         userId: user._id,
         passwordVersion: currentCredential.passwordVersion,
         ...(input.userAgent ? { userAgent: input.userAgent.slice(0, 512) } : {}),
         ...(input.ipHash ? { ipHash: input.ipHash } : {}),
       }, session);
+      await releaseAdmission(admission!, session);
       // Preserve past failures: success is evidence, not a telemetry reset.
       await recordAuthAttempt({
         ...attemptContext, userId: user._id.toHexString(),
@@ -178,7 +205,12 @@ export async function loginUser(input: LoginInput) {
     }
     return result;
   } catch (error) {
+    // Infrastructure failures must not consume the client's failure budget.
+    if (admission && (!(error instanceof AppError) || error.statusCode >= 500)) {
+      await releaseAdmission(admission).catch(() => undefined);
+    }
     if (error instanceof AppError) throw error;
+    logger.error({ err: error, operation: "auth.login", requestId: input.requestId }, "Login storage failed");
     // Do not expose database errors, hashes, or token material to logs or callers.
     throw new AppError(
       "Authentication is temporarily unavailable.",

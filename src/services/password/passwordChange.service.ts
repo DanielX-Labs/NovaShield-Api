@@ -5,7 +5,7 @@ import { SessionModel } from "../../models/Session.model.js";
 import { AppError } from "../../utils/AppError.js";
 import { verifyPassword } from "./passwordHash.service.js";
 import {
-  prepareReplacement, replaceCredential, notifyPasswordChanged,
+  prepareReplacement, replaceCredential,
 } from "./passwordLifecycle.service.js";
 import { sessionTransaction } from "../session/sessionTransaction.js";
 
@@ -53,5 +53,4 @@ export async function changePassword(input: ChangePasswordInput): Promise<void> 
       "AUTH_PASSWORD_CHANGED", requestId, transaction,
     );
   });
-  await notifyPasswordChanged(userId, user.emailNormalized, requestId);
 }

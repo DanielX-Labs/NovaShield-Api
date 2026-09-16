@@ -2,6 +2,7 @@ import type { RequestHandler } from "express";
 import { AbuseBucketModel } from "../models/AbuseBucket.model.js";
 import { AppError } from "../utils/AppError.js";
 import { logger } from "../config/logger.js";
+import { hashNetworkAddress } from "../services/security/networkIdentity.service.js";
 import {
   hashSecurityIdentifier,
   recordSecurityEvent,
@@ -17,13 +18,16 @@ export function authAbuseLimit(
   byEmail = false,
   windowMs = WINDOW_MS,
   skipSuccessfulRequests = false,
+  byNetwork = false,
 ): RequestHandler {
   return async (req, res, next) => {
     try {
       const context = securityContext(req);
-      const identifier = byEmail
+      const identifier = byNetwork ? hashNetworkAddress(req.ip) : byEmail
         ? hashSecurityIdentifier(req.body.email)
         : context.ipHash;
+      // IPv4 stays under the existing host budget; do not group unrelated IPv4 users.
+      if (byNetwork && !identifier) { next(); return; }
       const window = Math.floor(Date.now() / windowMs);
       const id = `${scope}:${identifier}:${window}`;
       let bucket;

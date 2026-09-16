@@ -23,7 +23,8 @@ describe("Authentication abuse primitives", () => {
     expect(hash).toBe(hashAuthIdentifier("customer@example.com"));
     expect(hash).toBe(hashAuthIdentifier("\uff43ustomer@example.com"));
     expect(hash).toMatch(/^[a-f0-9]{64}$/u);
-    expect(hash).not.toBe(hashIpAddress("customer@example.com"));
+    expect(hash).not.toBe(hashIpAddress("192.0.2.1"));
+    expect(() => hashIpAddress("customer@example.com")).toThrow("Invalid network address");
   });
   it("uses a nonblocking timer for the requested delay", async () => {
     vi.useFakeTimers();

@@ -55,6 +55,8 @@ const securityEventSchema = new Schema<SecurityEvent>(
 securityEventSchema.index({ eventType: 1, createdAt: -1 });
 securityEventSchema.index({ userId: 1, createdAt: -1 });
 securityEventSchema.index({ severity: 1, createdAt: -1 });
+// Retention filters by time alone, independently of event category or identity.
+securityEventSchema.index({ createdAt: 1 });
 
 export const SecurityEventModel: Model<SecurityEvent> = mongoose.model<SecurityEvent>(
   "SecurityEvent",

@@ -1,4 +1,5 @@
 import { Types, type ClientSession } from "mongoose";
+import { randomBytes } from "node:crypto";
 import { env } from "../../config/env.js";
 import {
   OtpChallengeModel, type OtpPurpose,
@@ -25,7 +26,8 @@ export async function createOtpChallenge(
   input: CreateChallengeInput,
   transaction: ClientSession,
 ) {
-  const challengeId = input.challengeId ?? new Types.ObjectId();
+  // Reset challenge locators must not expose ObjectId timestamp/counter sequences.
+  const challengeId = input.challengeId ?? new Types.ObjectId(randomBytes(12));
   const otp = input.otp ?? generateOtp();
   const now = new Date();
   await OtpChallengeModel.updateMany({
@@ -38,6 +40,8 @@ export async function createOtpChallenge(
     userId: input.userId,
     purpose: input.purpose,
     target: input.target,
+    ...(input.purpose === "PASSWORD_RESET" ? { resetProtocolVersion: 2 } : {}),
+    ...(input.purpose === "EMAIL_VERIFICATION" ? { verificationProtocolVersion: 2 } : {}),
     otpHash: hashOtp(otp, challengeId.toHexString()),
     expiresAt: new Date(
       now.getTime() + (input.ttlMinutes ?? env.OTP_TTL_MINUTES) * 60_000,
@@ -56,10 +60,11 @@ export async function verifyOtpChallenge(
   otp: string,
   target: string,
   context: SecurityContext,
+  challengeId: string,
 ) {
   return sessionTransaction(async (transaction) => {
     const challenge = await OtpChallengeModel.findOneAndUpdate({
-      userId, purpose, target,
+      _id: challengeId, userId, purpose, target, resetProtocolVersion: 2,
       consumedAt: { $exists: false },
       expiresAt: { $gt: new Date() },
       $expr: { $lt: ["$attempts", "$maxAttempts"] },

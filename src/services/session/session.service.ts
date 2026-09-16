@@ -3,6 +3,8 @@ import mongoose, { Types, type ClientSession } from "mongoose";
 import { env } from "../../config/env.js";
 import { SessionModel } from "../../models/Session.model.js";
 import { RefreshTokenModel } from "../../models/RefreshToken.model.js";
+import { AuthUserModel } from "../../models/AuthUser.model.js";
+import { AppError } from "../../utils/AppError.js";
 import { createAccessToken } from "./accessToken.service.js";
 import {
   generateRefreshToken,
@@ -31,6 +33,20 @@ export async function createSession(
   }
 
   const now = new Date();
+  // The identity write prevents concurrent logins from both taking the last slot.
+  const locked = await AuthUserModel.updateOne({
+    _id: input.userId, status: "ACTIVE", isEmailVerified: true,
+  }, { $inc: { sessionAdmissionVersion: 1 } }, { session: transaction });
+  if (!locked.matchedCount) {
+    throw new AppError("Authentication cannot be completed.", 403, "ACCOUNT_NOT_AVAILABLE");
+  }
+  const activeCount = await SessionModel.countDocuments({
+    userId: input.userId, revokedAt: { $exists: false }, expiresAt: { $gt: now },
+  }).session(transaction);
+  if (activeCount >= (env.MAX_ACTIVE_SESSIONS ?? 20)) {
+    throw new AppError("Revoke an existing session before signing in on another device.",
+      409, "ACTIVE_SESSION_LIMIT");
+  }
   const expiresAt = new Date(
     now.getTime() + env.REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000,
   );

@@ -36,6 +36,8 @@ const sessionSchema = new Schema<Session>(
 );
 
 sessionSchema.index({ userId: 1, revokedAt: 1 });
+// Stable public identifiers support keyset pagination without exposing MongoDB IDs.
+sessionSchema.index({ userId: 1, revokedAt: 1, sessionId: 1 });
 
 export const SessionModel: Model<Session> = mongoose.model<Session>(
   "Session",

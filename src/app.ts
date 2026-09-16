@@ -11,9 +11,13 @@ import { healthRouter } from "./routes/health.routes.js";
 import { createAuthRouter } from "./routes/auth.routes.js";
 import { sessionRouter } from "./routes/session.routes.js";
 import { passwordRouter } from "./routes/password.routes.js";
+import { introspectionRouter } from "./routes/introspection.routes.js";
 
 export const app = express();
 app.disable("x-powered-by");
+// Trust only explicitly configured proxy CIDRs, never arbitrary forwarding headers.
+const trustedProxies = env.TRUST_PROXY_CIDRS?.split(",").map(value => value.trim()).filter(Boolean);
+if (trustedProxies?.length) app.set("trust proxy", trustedProxies);
 
 // Order matters: every request, including failures, gets an ID and logging.
 app.use(requestIdMiddleware);
@@ -35,6 +39,7 @@ app.use("/api/v1", healthRouter);
 app.use("/api/v1", createAuthRouter());
 app.use("/api/v1", sessionRouter);
 app.use("/api/v1", passwordRouter);
+app.use("/api/v1", introspectionRouter);
 
 // Fallback handlers must come after all routes.
 app.use(notFoundHandler);

@@ -14,6 +14,8 @@ export const passwordResetRequestSchema = z.object({
 export const passwordResetConfirmSchema = z.object({
   body: z.object({
     email,
+    // Delivered only through the mailbox, never returned by reset request.
+    challengeId: z.string().regex(/^[a-f0-9]{24}$/u),
     otp: z.string().regex(/^\d{6}$/u),
     newPassword: password,
   }).strict(),

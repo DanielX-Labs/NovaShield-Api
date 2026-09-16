@@ -70,4 +70,4 @@ Refresh rotation, reuse detection, logout, session management, and authenticated
 middleware are implemented in the [session lifecycle](session-lifecycle.md).
 Password change/reset is implemented in the [password lifecycle](password-lifecycle.md).
 Account-keyed throttling and progressive delays are described in the
-[abuse defense documentation](auth-abuse.md). Production hardening is next.
+[abuse defense documentation](auth-abuse.md). See [production operations](production.md) for admission, delivery, key rotation and release gates.

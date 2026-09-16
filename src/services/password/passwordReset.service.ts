@@ -1,16 +1,16 @@
 import { AuthUserModel } from "../../models/AuthUser.model.js";
 import { CredentialModel } from "../../models/Credential.model.js";
 import { OtpChallengeModel } from "../../models/OtpChallenge.model.js";
+import { AbuseBucketModel } from "../../models/AbuseBucket.model.js";
 import { normalizeEmail } from "../../utils/email.js";
 import { env } from "../../config/env.js";
 import { AppError } from "../../utils/AppError.js";
-import { logger } from "../../config/logger.js";
 import { createOtpChallenge, verifyOtpChallenge } from "../otp/otpChallenge.service.js";
-import { sendPasswordResetOtpEmail } from "../email/email.service.js";
+import { enqueueEmail } from "../email/emailOutbox.service.js";
 import { recordSecurityEvent } from "../security/securityEvent.service.js";
 import { sessionTransaction } from "../session/sessionTransaction.js";
 import {
-  prepareReplacement, replaceCredential, notifyPasswordChanged,
+  prepareReplacement, replaceCredential,
 } from "./passwordLifecycle.service.js";
 
 function invalidReset(): AppError {
@@ -24,7 +24,7 @@ export async function requestPasswordReset(input: {
 }): Promise<void> {
   const email = normalizeEmail(input.email);
   const context = { requestId: input.requestId ?? "", ipHash: "" };
-  const result = await sessionTransaction(async (transaction) => {
+  await sessionTransaction(async (transaction) => {
     // This shared cooldown prevents concurrent requests from issuing multiple codes.
     const user = await AuthUserModel.findOneAndUpdate({
       emailNormalized: email, status: "ACTIVE", isEmailVerified: true,
@@ -41,6 +41,24 @@ export async function requestPasswordReset(input: {
     const credential = await CredentialModel.findOne({ userId: user._id })
       .session(transaction);
     if (!credential) return null;
+    // Anonymous requests must not replace a usable code already in the owner's inbox.
+    const outstanding = await OtpChallengeModel.exists({
+      userId: user._id, purpose: "PASSWORD_RESET", credentialVersion: credential.passwordVersion,
+      resetProtocolVersion: 2,
+      consumedAt: { $exists: false }, expiresAt: { $gt: new Date() },
+      $expr: { $lt: ["$attempts", "$maxAttempts"] },
+    }).session(transaction);
+    if (outstanding) return null;
+    // Count actual issuance while the user write serializes competing requests.
+    const windowMs = env.PASSWORD_RESET_REQUEST_WINDOW_MINUTES * 60_000;
+    const window = Math.floor(Date.now() / windowMs);
+    const bucketId = `reset-issued:${user._id.toHexString()}:${window}`;
+    const bucket = await AbuseBucketModel.findById(bucketId).session(transaction);
+    if (bucket && bucket.count >= env.PASSWORD_RESET_REQUEST_LIMIT) return null;
+    await AbuseBucketModel.updateOne({ _id: bucketId }, {
+      $inc: { count: 1 },
+      $setOnInsert: { expiresAt: new Date((window + 2) * windowMs) },
+    }, { upsert: true, session: transaction });
     const challenge = await createOtpChallenge({
       userId: user._id,
       purpose: "PASSWORD_RESET",
@@ -52,33 +70,16 @@ export async function requestPasswordReset(input: {
     await recordSecurityEvent(
       "AUTH_PASSWORD_RESET_REQUESTED", context, user._id, transaction, "LOW",
     );
-    return { userId: user._id, ...challenge };
+    await enqueueEmail({ userId: user._id, ...challenge, email, kind: "RESET",
+      expiresAt: new Date(Date.now() + env.PASSWORD_RESET_OTP_TTL_MINUTES * 60_000),
+      requestId: context.requestId }, transaction);
   });
-  if (!result) return;
-
-  try {
-    // Never send email inside a transaction callback that may be retried.
-    await sendPasswordResetOtpEmail(email, result.otp);
-  } catch {
-    // SMTP failure must not reveal whether an eligible account exists.
-    try {
-      await sessionTransaction(async (transaction) => {
-        await OtpChallengeModel.updateOne({ _id: result.challengeId }, {
-          $set: { consumedAt: new Date() },
-        }, { session: transaction });
-        await recordSecurityEvent(
-          "AUTH_EMAIL_DELIVERY_FAILURE", context, result.userId, transaction, "LOW",
-        );
-      });
-    } catch {
-      logger.warn({ requestId: context.requestId }, "Reset delivery recovery failed.");
-    }
-  }
 }
 
 export async function confirmPasswordReset(input: {
-  email: string; otp: string; newPassword: string; requestId?: string;
+  email: string; challengeId: string; otp: string; newPassword: string; requestId?: string;
 }): Promise<void> {
+  if (!/^[a-f0-9]{24}$/u.test(input.challengeId)) throw invalidReset();
   const email = normalizeEmail(input.email);
   const user = await AuthUserModel.findOne({ emailNormalized: email });
   if (!user || !user.isEmailVerified || user.status !== "ACTIVE") throw invalidReset();
@@ -91,6 +92,7 @@ export async function confirmPasswordReset(input: {
   // feedback. This reserves an attempt but does not consume the OTP.
   const proof = await verifyOtpChallenge(
     user._id, "PASSWORD_RESET", input.otp, email, { requestId, ipHash: "" },
+    input.challengeId,
   );
   if (!proof || proof.credentialVersion !== credential.passwordVersion) throw invalidReset();
   const newHash = await prepareReplacement(credential, input.newPassword, email);
@@ -103,6 +105,7 @@ export async function confirmPasswordReset(input: {
       purpose: "PASSWORD_RESET",
       target: email,
       credentialVersion: credential.passwordVersion,
+      resetProtocolVersion: 2,
       consumedAt: { $exists: false },
       expiresAt: { $gt: new Date() },
     }, { $set: { consumedAt: new Date() } }, {
@@ -114,5 +117,4 @@ export async function confirmPasswordReset(input: {
       "AUTH_PASSWORD_RESET_COMPLETED", requestId, transaction,
     );
   });
-  await notifyPasswordChanged(user._id, email, requestId);
 }

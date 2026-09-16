@@ -60,8 +60,7 @@ export async function assessLoginAbuse(input: {
   // Scores describe indicators, not proof of an attack or an account compromise.
   score = Math.min(score, 100);
   return {
-    blocked: accountFailures >= env.AUTH_ACCOUNT_FAILURE_LIMIT
-      || ipFailures >= env.AUTH_IP_FAILURE_LIMIT,
+    blocked: ipFailures >= env.AUTH_IP_FAILURE_LIMIT,
     delayMs: calculateProgressiveDelay(accountFailures),
     suspicious: score >= env.AUTH_SUSPICIOUS_SCORE_THRESHOLD,
     score, reasons, accountFailures, ipFailures, distinctAccountsFromIp,
